@@ -4,7 +4,7 @@ A **SillyTavern** extension that acts as a bridge to **SillyInnkeeper**.
 
 It is designed to bring SillyInnkeeper’s features into SillyTavern and create a more seamless workflow: when you interact with cards inside SillyInnkeeper, SillyTavern can automatically receive and import them.
 
-Main SillyInnkeeper repository: [dmitryplyaskin/SillyInnkeeper](https://github.com/dmitryplyaskin/SillyInnkeeper)
+Main SillyInnkeeper repository: [SillyInnkeeper](https://github.com/dmitryplyaskin/SillyInnkeeper)
 
 ## Features
 
