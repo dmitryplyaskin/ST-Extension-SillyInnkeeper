@@ -1,8 +1,13 @@
 import {
   eventSource,
   event_types,
+  characters,
+  getCharacters,
   getRequestHeaders,
   name1,
+  select_rm_info,
+  selectCharacterById,
+  this_chid,
 } from "../../../../script.js";
 
 import {
@@ -41,19 +46,6 @@ function clearReconnectTimer() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
-  }
-}
-
-function buildUrlWithToken(url, token) {
-  if (!token) return url;
-  try {
-    const u = new URL(url);
-    u.searchParams.set("token", token);
-    return u.toString();
-  } catch {
-    // fallback for relative URLs
-    const join = url.includes("?") ? "&" : "?";
-    return `${url}${join}token=${encodeURIComponent(token)}`;
   }
 }
 
@@ -111,10 +103,7 @@ async function reportResultToSi({ cardId, ok, message, stCharacterId }) {
   const s = getSettings();
   if (!s.reportResult) return;
 
-  const url = buildUrlWithToken(
-    joinSiUrl(s.siBase, "/api/st/import-result"),
-    s.token
-  );
+  const url = joinSiUrl(s.siBase, "/api/st/import-result");
 
   try {
     const res = await fetch(url, {
@@ -167,9 +156,7 @@ async function importPngIntoSt(file) {
 async function downloadPngAsFile({ cardId, exportUrl, filename }) {
   const s = getSettings();
   const exportAbs = joinSiUrl(s.siBase, exportUrl);
-  const url = buildUrlWithToken(exportAbs, s.token);
-
-  const res = await fetch(url);
+  const res = await fetch(exportAbs);
   if (!res.ok) {
     throw new Error(`PNG download failed: ${res.status} ${res.statusText}`);
   }
@@ -190,8 +177,33 @@ async function handleCardPlay(payload) {
   updateLast(null, `Importing ${payload.cardId}...`);
 
   try {
+    const oldSelectedChar =
+      this_chid !== undefined ? characters?.[this_chid]?.avatar : null;
+
     const file = await downloadPngAsFile(payload);
     const stFileName = await importPngIntoSt(file);
+
+    // Refresh characters list (triggers /api/characters/all) and highlight imported card in library
+    await getCharacters();
+    try {
+      select_rm_info("char_import_no_toast", stFileName, oldSelectedChar);
+    } catch (e) {
+      warn("Failed to highlight imported character", e);
+    }
+
+    // Optionally open imported character
+    const s = getSettings();
+    if (s.openImported) {
+      const avatarFile = stFileName?.endsWith(".png")
+        ? stFileName
+        : `${stFileName}.png`;
+      const idx = characters.findIndex((c) => c?.avatar === avatarFile);
+      if (idx >= 0) {
+        await selectCharacterById(idx, { switchMenu: false });
+      } else {
+        warn("Could not find imported character in list", avatarFile);
+      }
+    }
 
     const took = Date.now() - startedAt;
     updateLast(true, `OK: ${payload.cardId} (${took}ms)`);
@@ -308,7 +320,7 @@ export async function connect() {
     return;
   }
 
-  const sseUrl = buildUrlWithToken(joinSiUrl(s.siBase, "/api/events"), s.token);
+  const sseUrl = joinSiUrl(s.siBase, "/api/events");
   updateStatus(false, "Connecting...");
 
   try {
@@ -363,7 +375,7 @@ export async function testConnection() {
     return false;
   }
 
-  const sseUrl = buildUrlWithToken(joinSiUrl(s.siBase, "/api/events"), s.token);
+  const sseUrl = joinSiUrl(s.siBase, "/api/events");
 
   return await new Promise((resolve) => {
     let done = false;

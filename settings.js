@@ -9,9 +9,9 @@ const SETTINGS_KEY = "sillyInnkeeper";
 const defaultSettings = {
   enabled: true,
   siBase: "http://127.0.0.1:48912",
-  token: "",
   autoConnect: true,
   reportResult: true,
+  openImported: false,
   dedupeWindowMs: 10_000,
   queueMax: 20,
 };
@@ -70,7 +70,6 @@ export function loadSettings() {
     extension_settings[SETTINGS_KEY].enabled !== false
   );
   $("#silly-innkeeper-url").val(extension_settings[SETTINGS_KEY].siBase);
-  $("#silly-innkeeper-token").val(extension_settings[SETTINGS_KEY].token ?? "");
   $("#silly-innkeeper-autoconnect").prop(
     "checked",
     extension_settings[SETTINGS_KEY].autoConnect !== false
@@ -78,6 +77,10 @@ export function loadSettings() {
   $("#silly-innkeeper-report-result").prop(
     "checked",
     extension_settings[SETTINGS_KEY].reportResult !== false
+  );
+  $("#silly-innkeeper-open-imported").prop(
+    "checked",
+    extension_settings[SETTINGS_KEY].openImported === true
   );
 }
 
@@ -88,9 +91,9 @@ export function getSettings() {
   return {
     enabled: s.enabled !== false,
     siBase: normalizeUrl(s.siBase),
-    token: String(s.token ?? "").trim(),
     autoConnect: s.autoConnect !== false,
     reportResult: s.reportResult !== false,
+    openImported: s.openImported === true,
     dedupeWindowMs: Number(s.dedupeWindowMs ?? defaultSettings.dedupeWindowMs),
     queueMax: Number(s.queueMax ?? defaultSettings.queueMax),
   };
@@ -173,14 +176,6 @@ export async function initSettingsUI() {
       });
 
     $(document)
-      .off("input", "#silly-innkeeper-token")
-      .on("input", "#silly-innkeeper-token", function () {
-        extension_settings[SETTINGS_KEY].token = String($(this).val() ?? "");
-        saveSettingsDebounced();
-        window.__st_sillyInnkeeper?.onSettingsChanged?.();
-      });
-
-    $(document)
       .off("change", "#silly-innkeeper-autoconnect")
       .on("change", "#silly-innkeeper-autoconnect", function () {
         extension_settings[SETTINGS_KEY].autoConnect = $(this).prop("checked");
@@ -192,6 +187,13 @@ export async function initSettingsUI() {
       .off("change", "#silly-innkeeper-report-result")
       .on("change", "#silly-innkeeper-report-result", function () {
         extension_settings[SETTINGS_KEY].reportResult = $(this).prop("checked");
+        saveSettingsDebounced();
+      });
+
+    $(document)
+      .off("change", "#silly-innkeeper-open-imported")
+      .on("change", "#silly-innkeeper-open-imported", function () {
+        extension_settings[SETTINGS_KEY].openImported = $(this).prop("checked");
         saveSettingsDebounced();
       });
 
