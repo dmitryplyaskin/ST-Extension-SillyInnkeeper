@@ -1,0 +1,107 @@
+<div id="silly_innkeeper_settings" class="silly-innkeeper-settings">
+  <div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+      <div class="flex-container alignitemscenter margin0">
+        <b>SillyInnkeeper</b>
+      </div>
+      <div
+        class="inline-drawer-icon fa-solid fa-circle-chevron-down down"
+      ></div>
+    </div>
+
+    <div class="inline-drawer-content">
+      <div class="flex-container flexFlowColumn gap10">
+        <label class="checkbox_label">
+          <input id="silly-innkeeper-enabled" type="checkbox" />
+          <span>Enable extension</span>
+        </label>
+
+        <label class="flex-container flexFlowColumn">
+          <span class="margin-bot-5">SillyInnkeeper URL</span>
+          <input
+            id="silly-innkeeper-url"
+            class="text_pole"
+            type="text"
+            placeholder="http://127.0.0.1:48912"
+            autocomplete="off"
+          />
+          <small class="text_muted"
+            >Only http(s) is allowed. Default:
+            <code>http://127.0.0.1:48912</code></small
+          >
+        </label>
+
+        <label class="flex-container flexFlowColumn">
+          <span class="margin-bot-5">Token (optional)</span>
+          <input
+            id="silly-innkeeper-token"
+            class="text_pole"
+            type="text"
+            placeholder=""
+            autocomplete="off"
+          />
+          <small class="text_muted"
+            >If set, will be appended as <code>?token=...</code> to SI
+            requests.</small
+          >
+        </label>
+
+        <label class="checkbox_label">
+          <input id="silly-innkeeper-autoconnect" type="checkbox" />
+          <span>Auto-connect</span>
+        </label>
+
+        <label class="checkbox_label">
+          <input id="silly-innkeeper-report-result" type="checkbox" />
+          <span>Report import result back to SillyInnkeeper (optional)</span>
+        </label>
+
+        <div class="flex-container gap10">
+          <button
+            id="silly-innkeeper-connect"
+            class="menu_button"
+            type="button"
+            style="flex: 1"
+          >
+            <i class="fa-solid fa-plug"></i> Connect
+          </button>
+          <button
+            id="silly-innkeeper-disconnect"
+            class="menu_button"
+            type="button"
+            style="flex: 1"
+          >
+            <i class="fa-solid fa-circle-xmark"></i> Disconnect
+          </button>
+        </div>
+
+        <button
+          id="silly-innkeeper-test-connection"
+          class="menu_button"
+          type="button"
+          style="width: 100%"
+        >
+          <i class="fa-solid fa-signal"></i> Test connection
+        </button>
+
+        <div class="silly-innkeeper-status">
+          <div>
+            <b>Status:</b>
+            <span id="silly-innkeeper-connection-status" class="text_muted"
+              >Disconnected</span
+            >
+          </div>
+          <div class="margin-top-5">
+            <b>Last:</b>
+            <span id="silly-innkeeper-last-result" class="text_muted">-</span>
+          </div>
+        </div>
+
+        <small class="text_muted">
+          Listens for SSE event <code>st:card_play</code> from SillyInnkeeper,
+          downloads a CCv3 PNG, then imports it via ST internal API.
+        </small>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,26 @@
+.silly-innkeeper-settings .gap10 {
+  gap: 10px;
+}
+
+.silly-innkeeper-status {
+  padding: 10px;
+  border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  background: var(--SmartThemeBodyColor, rgba(0, 0, 0, 0.15));
+}
+
+#silly-innkeeper-connection-status.si-connected {
+  color: var(--SmartThemeSuccessColor, #3fb950);
+}
+
+#silly-innkeeper-connection-status.si-disconnected {
+  color: var(--SmartThemeWarningColor, #d29922);
+}
+
+#silly-innkeeper-last-result.si-ok {
+  color: var(--SmartThemeSuccessColor, #3fb950);
+}
+
+#silly-innkeeper-last-result.si-err {
+  color: var(--SmartThemeErrorColor, #f85149);
+}
