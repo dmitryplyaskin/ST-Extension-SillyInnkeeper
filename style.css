@@ -2,6 +2,10 @@
   gap: 10px;
 }
 
+.silly-innkeeper-settings .menu_button > i {
+  margin-right: 6px;
+}
+
 .silly-innkeeper-status {
   padding: 10px;
   border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
