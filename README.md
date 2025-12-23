@@ -4,7 +4,7 @@ A **SillyTavern** extension that acts as a bridge to **SillyInnkeeper**.
 
 It is designed to bring SillyInnkeeper’s features into SillyTavern and create a more seamless workflow: when you interact with cards inside SillyInnkeeper, SillyTavern can automatically receive and import them.
 
-Main SillyInnkeeper repository: [dmitryplyaskin/SillyInnkeeper](https://github.com/dmitryplyaskin/SillyInnkeeper)
+Main SillyInnkeeper repository: [SillyInnkeeper](https://github.com/dmitryplyaskin/SillyInnkeeper)
 
 ## Features
 
@@ -15,15 +15,12 @@ Main SillyInnkeeper repository: [dmitryplyaskin/SillyInnkeeper](https://github.c
 
 ## Installation
 
-This is a third-party extension.
-
-1. Close SillyTavern.
-2. Copy this folder to:
-   `SillyTavern/public/scripts/extensions/third-party/ST-Extension-SillyInnkeeper/`
-   Make sure the folder contains `manifest.json`.
-3. Start SillyTavern.
-4. Open **Extensions** and enable **SillyInnkeeper**.
-5. If the settings UI does not appear, do a hard refresh (e.g. `Ctrl+F5`).
+Install via SillyTavern's extension installer using the repository URL:
+   
+```
+https://github.com/dmitryplyaskin/ST-Extension-SillyInnkeeper
+```
+ 
 
 ## Quick start
 
