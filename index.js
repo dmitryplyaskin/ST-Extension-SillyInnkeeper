@@ -9,6 +9,7 @@ import {
   selectCharacterById,
   this_chid,
 } from "../../../../script.js";
+import { importTags } from "../../../tags.js";
 
 import {
   initSettingsUI,
@@ -185,6 +186,15 @@ async function handleCardPlay(payload) {
 
     // Refresh characters list (triggers /api/characters/all) and highlight imported card in library
     await getCharacters();
+
+    const avatarFile = stFileName?.endsWith(".png")
+      ? stFileName
+      : `${stFileName}.png`;
+    const idx = characters.findIndex((c) => c?.avatar === avatarFile);
+
+    if (idx >= 0) {
+      await importTags(characters[idx]);
+    }
     try {
       select_rm_info("char_import_no_toast", stFileName, oldSelectedChar);
     } catch (e) {
