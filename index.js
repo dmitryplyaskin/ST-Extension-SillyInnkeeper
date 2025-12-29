@@ -10,6 +10,7 @@ import {
   this_chid,
 } from "../../../../script.js";
 import { importTags } from "../../../tags.js";
+import { getCurrentUserHandle } from "../../../user.js";
 
 import {
   initSettingsUI,
@@ -24,7 +25,12 @@ let reconnectTimer = null;
 let reconnectBackoffMs = 1000;
 let isManuallyDisconnected = false;
 
-/** @type {{ cardId: string, exportUrl: string, filename?: string, ts?: number }[]} */
+/**
+ * @type {(
+ *  | { kind: "import", cardId: string, exportUrl: string, filename?: string, ts?: number }
+ *  | { kind: "open", cardId: string, stProfileHandle: string, stAvatarFile: string, stAvatarBase: string, ts?: number }
+ * )[]}
+ */
 const queue = [];
 let processing = false;
 
@@ -100,7 +106,13 @@ function closeEventSource() {
   es = null;
 }
 
-async function reportResultToSi({ cardId, ok, message, stCharacterId }) {
+async function reportResultToSi({
+  cardId,
+  ok,
+  message,
+  stCharacterId,
+  action,
+}) {
   const s = getSettings();
   if (!s.reportResult) return;
 
@@ -115,6 +127,7 @@ async function reportResultToSi({ cardId, ok, message, stCharacterId }) {
       body: JSON.stringify({
         cardId,
         ok: !!ok,
+        action: action ? String(action) : undefined,
         message: message ? String(message).slice(0, 500) : undefined,
         stCharacterId: stCharacterId ? String(stCharacterId) : undefined,
       }),
@@ -173,6 +186,109 @@ async function downloadPngAsFile({ cardId, exportUrl, filename }) {
   return new File([blob], fileName, { type: "image/png" });
 }
 
+async function handleCardOpen(payload) {
+  const startedAt = Date.now();
+  updateLast(null, `Opening ${payload.cardId}...`);
+
+  try {
+    const currentHandle = getCurrentUserHandle?.() ?? "default-user";
+    const wantHandle = String(payload.stProfileHandle ?? "").trim();
+
+    if (!wantHandle) {
+      throw new Error("Missing stProfileHandle in st:card_open payload");
+    }
+
+    if (String(currentHandle) !== wantHandle) {
+      throw new Error(
+        `Wrong ST profile: current='${currentHandle}', expected='${wantHandle}'. Switch user/profile in SillyTavern.`
+      );
+    }
+
+    await getCharacters();
+
+    const avatarFile = String(payload.stAvatarFile ?? "").trim();
+    const avatarBase = String(payload.stAvatarBase ?? "").trim();
+    const avatarPng = avatarBase ? `${avatarBase}.png` : "";
+
+    if (!avatarFile && !avatarBase) {
+      throw new Error(
+        "Missing stAvatarFile/stAvatarBase in st:card_open payload"
+      );
+    }
+
+    const findIdx = () => {
+      if (avatarFile) {
+        const exact = characters.findIndex((c) => c?.avatar === avatarFile);
+        if (exact >= 0) return exact;
+      }
+      if (avatarPng) {
+        const exact = characters.findIndex((c) => c?.avatar === avatarPng);
+        if (exact >= 0) return exact;
+      }
+      if (avatarFile) {
+        const prefix = characters.findIndex((c) =>
+          String(c?.avatar ?? "").startsWith(avatarFile)
+        );
+        if (prefix >= 0) return prefix;
+      }
+      if (avatarBase) {
+        const prefix = characters.findIndex((c) =>
+          String(c?.avatar ?? "").startsWith(avatarBase)
+        );
+        if (prefix >= 0) return prefix;
+      }
+      return -1;
+    };
+
+    const idx = findIdx();
+    if (idx < 0) {
+      throw new Error(
+        `Character not found in current profile by avatar '${
+          avatarFile || avatarPng || avatarBase
+        }'`
+      );
+    }
+
+    // Open character (switches chat)
+    await selectCharacterById(idx, { switchMenu: false });
+
+    // Highlight in library (reuse ST import highlight behavior)
+    // IMPORTANT: do NOT pass previousCharId here.
+    // In SillyTavern, select_rm_info(..., previousCharId) calls setCharacterId(previousCharId),
+    // which can desync selected character vs opened chat and trigger integrity/save loops.
+    try {
+      const flashKey = avatarBase || avatarFile;
+      select_rm_info("char_import_no_toast", flashKey);
+    } catch (e) {
+      warn("Failed to highlight opened character", e);
+    }
+
+    const took = Date.now() - startedAt;
+    updateLast(true, `OK(open): ${payload.cardId} (${took}ms)`);
+
+    await reportResultToSi({
+      cardId: payload.cardId,
+      ok: true,
+      action: "open",
+      message: avatarFile ? `Opened: ${avatarFile}` : "Opened",
+      stCharacterId: avatarFile || avatarPng || avatarBase,
+    });
+  } catch (e) {
+    err("Open failed", payload, e);
+    updateLast(
+      false,
+      `ERR(open): ${payload.cardId} (${String(e?.message ?? e)})`
+    );
+
+    await reportResultToSi({
+      cardId: payload.cardId,
+      ok: false,
+      action: "open",
+      message: String(e?.message ?? e),
+    });
+  }
+}
+
 async function handleCardPlay(payload) {
   const startedAt = Date.now();
   updateLast(null, `Importing ${payload.cardId}...`);
@@ -221,6 +337,7 @@ async function handleCardPlay(payload) {
     await reportResultToSi({
       cardId: payload.cardId,
       ok: true,
+      action: "import",
       message: stFileName ? `Imported: ${stFileName}` : "Imported",
       stCharacterId: stFileName,
     });
@@ -231,6 +348,7 @@ async function handleCardPlay(payload) {
     await reportResultToSi({
       cardId: payload.cardId,
       ok: false,
+      action: "import",
       message: String(e?.message ?? e),
     });
   }
@@ -245,7 +363,11 @@ async function processQueue() {
       const item = queue.shift();
       if (!item) continue;
 
-      await handleCardPlay(item);
+      if (item.kind === "open") {
+        await handleCardOpen(item);
+      } else {
+        await handleCardPlay(item);
+      }
 
       // small yield
       await new Promise((r) => setTimeout(r, 0));
@@ -289,20 +411,49 @@ function enqueue(payload) {
 function onSseMessage(evt) {
   try {
     const payload = JSON.parse(evt.data);
-    if (!payload || payload.type !== "st:card_play") return;
+    if (
+      !payload ||
+      (payload.type !== "st:card_play" && payload.type !== "st:card_open")
+    )
+      return;
 
     const { enabled } = getSettings();
     if (!enabled) {
-      warn("Received st:card_play but extension disabled");
+      warn("Received ST event but extension disabled", payload?.type);
       return;
     }
 
-    if (!payload.cardId || !payload.exportUrl) {
+    if (!payload.cardId) {
+      warn("Invalid ST payload (no cardId)", payload);
+      return;
+    }
+
+    if (payload.type === "st:card_open") {
+      if (
+        !payload.stProfileHandle ||
+        (!payload.stAvatarFile && !payload.stAvatarBase)
+      ) {
+        warn("Invalid st:card_open payload", payload);
+        return;
+      }
+      enqueue({
+        kind: "open",
+        cardId: String(payload.cardId),
+        stProfileHandle: String(payload.stProfileHandle),
+        stAvatarFile: payload.stAvatarFile ? String(payload.stAvatarFile) : "",
+        stAvatarBase: payload.stAvatarBase ? String(payload.stAvatarBase) : "",
+        ts: payload.ts,
+      });
+      return;
+    }
+
+    if (!payload.exportUrl) {
       warn("Invalid st:card_play payload", payload);
       return;
     }
 
     enqueue({
+      kind: "import",
       cardId: String(payload.cardId),
       exportUrl: String(payload.exportUrl),
       filename: payload.filename ? String(payload.filename) : undefined,
@@ -361,6 +512,7 @@ export async function connect() {
     });
 
     es.addEventListener("st:card_play", onSseMessage);
+    es.addEventListener("st:card_open", onSseMessage);
   } catch (e) {
     closeEventSource();
     updateStatus(false, "Disconnected");
