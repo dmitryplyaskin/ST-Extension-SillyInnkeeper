@@ -25,6 +25,9 @@ let reconnectTimer = null;
 let reconnectBackoffMs = 1000;
 let isManuallyDisconnected = false;
 
+let refreshTimer = null;
+let pendingRefresh = null;
+
 /**
  * @type {(
  *  | { kind: "import", cardId: string, exportUrl: string, filename?: string, ts?: number }
@@ -110,7 +113,7 @@ async function reportResultToSi({
   cardId,
   ok,
   message,
-  stCharacterId,
+  stCharacterId = undefined,
   action,
 }) {
   const s = getSettings();
@@ -413,7 +416,9 @@ function onSseMessage(evt) {
     const payload = JSON.parse(evt.data);
     if (
       !payload ||
-      (payload.type !== "st:card_play" && payload.type !== "st:card_open")
+      (payload.type !== "st:card_play" &&
+        payload.type !== "st:card_open" &&
+        payload.type !== "st:cards_changed")
     )
       return;
 
@@ -425,6 +430,36 @@ function onSseMessage(evt) {
 
     if (!payload.cardId) {
       warn("Invalid ST payload (no cardId)", payload);
+      return;
+    }
+
+    if (payload.type === "st:cards_changed") {
+      const stProfileHandle = String(payload.stProfileHandle ?? "").trim();
+      const stAvatarFile = String(payload.stAvatarFile ?? "").trim();
+      const stAvatarBase = String(payload.stAvatarBase ?? "").trim();
+      const mode = String(payload.mode ?? "").trim();
+
+      // Coalesce bursts into a single refresh (saves getCharacters spam).
+      pendingRefresh = {
+        cardId: String(payload.cardId),
+        stProfileHandle,
+        stAvatarFile,
+        stAvatarBase,
+        mode,
+        ts: payload.ts,
+      };
+
+      if (!refreshTimer) {
+        refreshTimer = setTimeout(() => {
+          refreshTimer = null;
+          const p = pendingRefresh;
+          pendingRefresh = null;
+          if (!p) return;
+          refreshAfterCardsChanged(p).catch((e) =>
+            err("Failed to refresh after st:cards_changed", e)
+          );
+        }, 300);
+      }
       return;
     }
 
@@ -461,6 +496,70 @@ function onSseMessage(evt) {
     });
   } catch (e) {
     warn("Failed to parse SSE event data", e);
+  }
+}
+
+async function refreshAfterCardsChanged(payload) {
+  const startedAt = Date.now();
+
+  try {
+    const currentHandle = getCurrentUserHandle?.() ?? "default-user";
+    const wantHandle = String(payload.stProfileHandle ?? "").trim();
+    if (wantHandle && String(currentHandle) !== wantHandle) {
+      // Different ST profile; ignore.
+      return;
+    }
+
+    const oldSelectedAvatar =
+      this_chid !== undefined ? characters?.[this_chid]?.avatar : null;
+
+    updateLast(null, "Refreshing characters...");
+    await getCharacters();
+
+    const avatarFile = String(payload.stAvatarFile ?? "").trim();
+    const avatarBase =
+      String(payload.stAvatarBase ?? "").trim() ||
+      (avatarFile ? avatarFile.replace(/\.png$/i, "") : "");
+
+    // Try to highlight updated/new character in the UI (best-effort).
+    if (avatarBase || avatarFile) {
+      try {
+        const flashKey = avatarBase || avatarFile;
+        select_rm_info("char_import_no_toast", flashKey, oldSelectedAvatar);
+      } catch (e) {
+        warn("Failed to highlight refreshed character", e);
+      }
+    }
+
+    // If the updated file is currently selected, re-select it to force reload.
+    if (oldSelectedAvatar) {
+      const targetAvatar =
+        avatarFile && avatarFile.endsWith(".png")
+          ? avatarFile
+          : avatarFile
+          ? `${avatarFile}.png`
+          : oldSelectedAvatar;
+      if (targetAvatar && oldSelectedAvatar === targetAvatar) {
+        const idx = characters.findIndex((c) => c?.avatar === targetAvatar);
+        if (idx >= 0) {
+          await selectCharacterById(idx, { switchMenu: false });
+        }
+      }
+    }
+
+    const took = Date.now() - startedAt;
+    updateLast(
+      true,
+      `OK(refresh): ${payload.cardId}${
+        payload.mode ? ` (${payload.mode})` : ""
+      } (${took}ms)`
+    );
+  } catch (e) {
+    updateLast(
+      false,
+      `ERR(refresh): ${payload.cardId} (${String(e?.message ?? e)})`
+    );
+    throw e;
   }
 }
 
@@ -513,6 +612,7 @@ export async function connect() {
 
     es.addEventListener("st:card_play", onSseMessage);
     es.addEventListener("st:card_open", onSseMessage);
+    es.addEventListener("st:cards_changed", onSseMessage);
   } catch (e) {
     closeEventSource();
     updateStatus(false, "Disconnected");
@@ -533,7 +633,9 @@ export async function testConnection() {
   const s = getSettings();
 
   if (!s.enabled) {
-    toastr?.info?.("SillyInnkeeper extension is disabled");
+    /** @type {any} */
+    const toast = globalThis.toastr;
+    toast?.info?.("SillyInnkeeper extension is disabled");
     return false;
   }
 
@@ -550,9 +652,13 @@ export async function testConnection() {
         // ignore
       }
       if (ok) {
-        toastr?.success?.(msg ?? "Connected");
+        /** @type {any} */
+        const toast = globalThis.toastr;
+        toast?.success?.(msg ?? "Connected");
       } else {
-        toastr?.error?.(msg ?? "Failed to connect");
+        /** @type {any} */
+        const toast = globalThis.toastr;
+        toast?.error?.(msg ?? "Failed to connect");
       }
       resolve(ok);
     };
@@ -603,7 +709,7 @@ function init() {
   loadSettings();
 
   // expose API for settings UI
-  window.__st_sillyInnkeeper = {
+  /** @type {any} */ (window).__st_sillyInnkeeper = {
     connect,
     disconnect,
     testConnection,
