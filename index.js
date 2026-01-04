@@ -36,7 +36,8 @@ let reconnectBackoffMs = 1000;
 let isManuallyDisconnected = false;
 
 let refreshTimer = null;
-let pendingRefresh = null;
+/** @type {Map<string, any>} */
+const pendingRefreshByKey = new Map();
 
 /**
  * @type {(
@@ -161,7 +162,12 @@ function getTagByNameInsensitive(tagName) {
   );
 }
 
-async function syncTagsAfterCardsChanged({ avatarFile, avatarBase, mode }) {
+async function syncTagsAfterCardsChanged({
+  avatarFile,
+  avatarBase,
+  mode,
+  desiredTagNames,
+}) {
   // Respect ST global tag import setting; NONE means we do not touch tags at all.
   if (power_user?.tag_import_setting === tag_import_setting.NONE) return;
 
@@ -177,6 +183,24 @@ async function syncTagsAfterCardsChanged({ avatarFile, avatarBase, mode }) {
     return;
   }
 
+  // NOTE: empty array is meaningful here (means: clear tags).
+  const override = Array.isArray(desiredTagNames)
+    ? desiredTagNames
+        .map((t) => String(t ?? "").trim())
+        .filter((t) => t && !isExcludedCardTagName(t))
+    : null;
+
+  // If server sent explicit desired tags, use them for the import flow.
+  // `importTags(character)` reads `character.tags`, so we temporarily override it.
+  const prevCharacterTags = character?.tags;
+  if (override) {
+    try {
+      character.tags = override;
+    } catch {
+      // ignore (in case character is frozen)
+    }
+  }
+
   // Add/create tags via ST's own flow (respects ASK/NONE/ALL/ONLY_EXISTING and shows UI if needed)
   try {
     await importTags(character);
@@ -185,7 +209,8 @@ async function syncTagsAfterCardsChanged({ avatarFile, avatarBase, mode }) {
   }
 
   // Compute desired tag IDs from PNG metadata (character.tags), then remove only previously-imported extras.
-  const desiredNames = getDesiredCardTagNamesFromCharacter(character);
+  const desiredNames =
+    override ?? getDesiredCardTagNamesFromCharacter(character);
   const desiredIds = desiredNames
     .map((name) => getTagByNameInsensitive(name))
     .filter(Boolean)
@@ -207,6 +232,15 @@ async function syncTagsAfterCardsChanged({ avatarFile, avatarBase, mode }) {
   }
 
   setLastImportedTagIdsForAvatar(avatarKey, desiredIds);
+
+  // Restore previous character.tags (best-effort).
+  if (override) {
+    try {
+      character.tags = prevCharacterTags;
+    } catch {
+      // ignore
+    }
+  }
 
   // Best-effort: update chat DOM tag attributes immediately.
   try {
@@ -571,24 +605,31 @@ function onSseMessage(evt) {
       const stAvatarFile = String(payload.stAvatarFile ?? "").trim();
       const stAvatarBase = String(payload.stAvatarBase ?? "").trim();
       const mode = String(payload.mode ?? "").trim();
+      const desiredTagNames = Array.isArray(payload.tags)
+        ? payload.tags
+        : undefined;
 
-      // Coalesce bursts into a single refresh (saves getCharacters spam).
-      pendingRefresh = {
+      // Coalesce bursts into a batched refresh (saves getCharacters spam).
+      const key = `${stProfileHandle}|${
+        stAvatarFile || stAvatarBase || ""
+      }|${String(payload.cardId)}`;
+      pendingRefreshByKey.set(key, {
         cardId: String(payload.cardId),
         stProfileHandle,
         stAvatarFile,
         stAvatarBase,
         mode,
+        desiredTagNames,
         ts: payload.ts,
-      };
+      });
 
       if (!refreshTimer) {
         refreshTimer = setTimeout(() => {
           refreshTimer = null;
-          const p = pendingRefresh;
-          pendingRefresh = null;
-          if (!p) return;
-          refreshAfterCardsChanged(p).catch((e) =>
+          const items = Array.from(pendingRefreshByKey.values());
+          pendingRefreshByKey.clear();
+          if (!items.length) return;
+          refreshAfterCardsChangedBatch(items).catch((e) =>
             err("Failed to refresh after st:cards_changed", e)
           );
         }, 300);
@@ -632,43 +673,52 @@ function onSseMessage(evt) {
   }
 }
 
-async function refreshAfterCardsChanged(payload) {
+async function refreshAfterCardsChangedBatch(payloads) {
   const startedAt = Date.now();
 
   try {
     const currentHandle = getCurrentUserHandle?.() ?? "default-user";
-    const wantHandle = String(payload.stProfileHandle ?? "").trim();
-    if (wantHandle && String(currentHandle) !== wantHandle) {
-      // Different ST profile; ignore.
-      return;
-    }
+    const relevant = (Array.isArray(payloads) ? payloads : []).filter((p) => {
+      const wantHandle = String(p?.stProfileHandle ?? "").trim();
+      if (wantHandle && String(currentHandle) !== wantHandle) return false;
+      return true;
+    });
+    if (relevant.length === 0) return;
 
     const oldSelectedAvatar =
       this_chid !== undefined ? characters?.[this_chid]?.avatar : null;
 
-    updateLast(null, "Refreshing characters...");
+    updateLast(null, `Refreshing characters... (${relevant.length})`);
     await getCharacters();
 
-    const avatarFile = String(payload.stAvatarFile ?? "").trim();
-    const avatarBase =
-      String(payload.stAvatarBase ?? "").trim() ||
-      (avatarFile ? avatarFile.replace(/\.png$/i, "") : "");
+    // Sync tags for each changed card (best-effort).
+    for (const payload of relevant) {
+      const avatarFile = String(payload.stAvatarFile ?? "").trim();
+      const avatarBase =
+        String(payload.stAvatarBase ?? "").trim() ||
+        (avatarFile ? avatarFile.replace(/\.png$/i, "") : "");
 
-    // Sync ST tags from updated PNG metadata (best-effort).
-    try {
-      await syncTagsAfterCardsChanged({
-        avatarFile,
-        avatarBase,
-        mode: payload.mode,
-      });
-    } catch (e) {
-      warn("Failed to sync tags after st:cards_changed", e);
+      try {
+        await syncTagsAfterCardsChanged({
+          avatarFile,
+          avatarBase,
+          mode: payload.mode,
+          desiredTagNames: payload.desiredTagNames,
+        });
+      } catch (e) {
+        warn("Failed to sync tags after st:cards_changed", e);
+      }
     }
 
     // Try to highlight updated/new character in the UI (best-effort).
-    if (avatarBase || avatarFile) {
+    const last = relevant[relevant.length - 1];
+    const lastAvatarFile = String(last?.stAvatarFile ?? "").trim();
+    const lastAvatarBase =
+      String(last?.stAvatarBase ?? "").trim() ||
+      (lastAvatarFile ? lastAvatarFile.replace(/\.png$/i, "") : "");
+    if (lastAvatarBase || lastAvatarFile) {
       try {
-        const flashKey = avatarBase || avatarFile;
+        const flashKey = lastAvatarBase || lastAvatarFile;
         select_rm_info("char_import_no_toast", flashKey, oldSelectedAvatar);
       } catch (e) {
         warn("Failed to highlight refreshed character", e);
@@ -678,10 +728,10 @@ async function refreshAfterCardsChanged(payload) {
     // If the updated file is currently selected, re-select it to force reload.
     if (oldSelectedAvatar) {
       const targetAvatar =
-        avatarFile && avatarFile.endsWith(".png")
-          ? avatarFile
-          : avatarFile
-          ? `${avatarFile}.png`
+        lastAvatarFile && lastAvatarFile.endsWith(".png")
+          ? lastAvatarFile
+          : lastAvatarFile
+          ? `${lastAvatarFile}.png`
           : oldSelectedAvatar;
       if (targetAvatar && oldSelectedAvatar === targetAvatar) {
         const idx = characters.findIndex((c) => c?.avatar === targetAvatar);
@@ -692,17 +742,9 @@ async function refreshAfterCardsChanged(payload) {
     }
 
     const took = Date.now() - startedAt;
-    updateLast(
-      true,
-      `OK(refresh): ${payload.cardId}${
-        payload.mode ? ` (${payload.mode})` : ""
-      } (${took}ms)`
-    );
+    updateLast(true, `OK(refresh): ${relevant.length} (${took}ms)`);
   } catch (e) {
-    updateLast(
-      false,
-      `ERR(refresh): ${payload.cardId} (${String(e?.message ?? e)})`
-    );
+    updateLast(false, `ERR(refresh): (${String(e?.message ?? e)})`);
     throw e;
   }
 }
