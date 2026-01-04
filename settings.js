@@ -14,6 +14,12 @@ const defaultSettings = {
   openImported: false,
   dedupeWindowMs: 10_000,
   queueMax: 20,
+  /**
+   * Map avatar file name -> array of tag ids that were last synced from PNG metadata.
+   * Used to remove only previously-imported tags on subsequent syncs without touching user's manual tags.
+   * @type {{[avatar: string]: string[]}}
+   */
+  lastImportedTagIdsByAvatar: {},
 };
 
 let settingsUIInitialized = false;
@@ -97,6 +103,42 @@ export function getSettings() {
     dedupeWindowMs: Number(s.dedupeWindowMs ?? defaultSettings.dedupeWindowMs),
     queueMax: Number(s.queueMax ?? defaultSettings.queueMax),
   };
+}
+
+function ensureImportedTagIdsMap() {
+  if (!extension_settings[SETTINGS_KEY]) loadSettings();
+  const s = extension_settings[SETTINGS_KEY];
+  if (
+    !s.lastImportedTagIdsByAvatar ||
+    typeof s.lastImportedTagIdsByAvatar !== "object"
+  ) {
+    s.lastImportedTagIdsByAvatar = {};
+    saveSettingsDebounced();
+  }
+  return s.lastImportedTagIdsByAvatar;
+}
+
+export function getLastImportedTagIdsForAvatar(avatarKey) {
+  const map = ensureImportedTagIdsMap();
+  const key = String(avatarKey ?? "");
+  const v = map[key];
+  return Array.isArray(v) ? v.map(String) : [];
+}
+
+export function setLastImportedTagIdsForAvatar(avatarKey, tagIds) {
+  const map = ensureImportedTagIdsMap();
+  const key = String(avatarKey ?? "");
+  if (!key) return;
+  map[key] = Array.isArray(tagIds) ? tagIds.map(String) : [];
+  saveSettingsDebounced();
+}
+
+export function clearLastImportedTagIdsForAvatar(avatarKey) {
+  const map = ensureImportedTagIdsMap();
+  const key = String(avatarKey ?? "");
+  if (!key) return;
+  delete map[key];
+  saveSettingsDebounced();
 }
 
 export function setUiConnectionStatus({ connected, text } = {}) {

@@ -9,13 +9,23 @@ import {
   selectCharacterById,
   this_chid,
 } from "../../../../script.js";
-import { importTags } from "../../../tags.js";
+import {
+  importTags,
+  tags,
+  removeTagFromEntity,
+  applyCharacterTagsToMessageDivs,
+  tag_import_setting,
+} from "../../../tags.js";
 import { getCurrentUserHandle } from "../../../user.js";
+import { power_user } from "../../../power-user.js";
 
 import {
   initSettingsUI,
   loadSettings,
   getSettings,
+  getLastImportedTagIdsForAvatar,
+  setLastImportedTagIdsForAvatar,
+  clearLastImportedTagIdsForAvatar,
   setUiConnectionStatus,
   setUiLastResult,
 } from "./settings.js";
@@ -81,6 +91,129 @@ function updateStatus(connected, text) {
 
 function updateLast(ok, text) {
   setUiLastResult({ ok, text });
+}
+
+function normalizeTagNameForCompare(name) {
+  return String(name ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function isExcludedCardTagName(name) {
+  const n = String(name ?? "")
+    .trim()
+    .toUpperCase();
+  return n === "ROOT" || n === "TAVERN";
+}
+
+function findCharacterIndexByAvatar({ avatarFile, avatarBase }) {
+  const file = String(avatarFile ?? "").trim();
+  const base = String(avatarBase ?? "").trim();
+  const avatarPng = base ? `${base}.png` : "";
+
+  if (!file && !base) return -1;
+
+  const findIdx = () => {
+    if (file) {
+      const exact = characters.findIndex((c) => c?.avatar === file);
+      if (exact >= 0) return exact;
+    }
+    if (avatarPng) {
+      const exact = characters.findIndex((c) => c?.avatar === avatarPng);
+      if (exact >= 0) return exact;
+    }
+    if (file) {
+      const prefix = characters.findIndex((c) =>
+        String(c?.avatar ?? "").startsWith(file)
+      );
+      if (prefix >= 0) return prefix;
+    }
+    if (base) {
+      const prefix = characters.findIndex((c) =>
+        String(c?.avatar ?? "").startsWith(base)
+      );
+      if (prefix >= 0) return prefix;
+    }
+    return -1;
+  };
+
+  return findIdx();
+}
+
+function getDesiredCardTagNamesFromCharacter(character) {
+  const raw = Array.isArray(character?.tags) ? character.tags : [];
+  return raw
+    .map((t) => String(t ?? "").trim())
+    .filter((t) => t && !isExcludedCardTagName(t));
+}
+
+function getTagById(tagId) {
+  const id = String(tagId ?? "");
+  if (!id) return null;
+  return tags?.find?.((t) => String(t?.id ?? "") === id) ?? null;
+}
+
+function getTagByNameInsensitive(tagName) {
+  const needle = normalizeTagNameForCompare(tagName);
+  if (!needle) return null;
+  return (
+    tags?.find?.((t) => normalizeTagNameForCompare(t?.name) === needle) ?? null
+  );
+}
+
+async function syncTagsAfterCardsChanged({ avatarFile, avatarBase, mode }) {
+  // Respect ST global tag import setting; NONE means we do not touch tags at all.
+  if (power_user?.tag_import_setting === tag_import_setting.NONE) return;
+
+  const idx = findCharacterIndexByAvatar({ avatarFile, avatarBase });
+  if (idx < 0) return;
+
+  const character = characters[idx];
+  const avatarKey = String(character?.avatar ?? "").trim();
+  if (!avatarKey) return;
+
+  if (String(mode ?? "") === "delete") {
+    clearLastImportedTagIdsForAvatar(avatarKey);
+    return;
+  }
+
+  // Add/create tags via ST's own flow (respects ASK/NONE/ALL/ONLY_EXISTING and shows UI if needed)
+  try {
+    await importTags(character);
+  } catch (e) {
+    warn("importTags failed after st:cards_changed", e);
+  }
+
+  // Compute desired tag IDs from PNG metadata (character.tags), then remove only previously-imported extras.
+  const desiredNames = getDesiredCardTagNamesFromCharacter(character);
+  const desiredIds = desiredNames
+    .map((name) => getTagByNameInsensitive(name))
+    .filter(Boolean)
+    .map((t) => String(t.id))
+    .filter(Boolean);
+
+  const desiredIdSet = new Set(desiredIds);
+  const prevImported = getLastImportedTagIdsForAvatar(avatarKey);
+  const toRemove = prevImported.filter((id) => !desiredIdSet.has(String(id)));
+
+  for (const id of toRemove) {
+    const tagObj = getTagById(id);
+    if (!tagObj) continue;
+    try {
+      removeTagFromEntity(tagObj, avatarKey);
+    } catch (e) {
+      warn("Failed to remove previously imported tag", id, avatarKey, e);
+    }
+  }
+
+  setLastImportedTagIdsForAvatar(avatarKey, desiredIds);
+
+  // Best-effort: update chat DOM tag attributes immediately.
+  try {
+    applyCharacterTagsToMessageDivs();
+  } catch (e) {
+    // ignore
+  }
 }
 
 function scheduleReconnect(reason = "") {
@@ -520,6 +653,17 @@ async function refreshAfterCardsChanged(payload) {
     const avatarBase =
       String(payload.stAvatarBase ?? "").trim() ||
       (avatarFile ? avatarFile.replace(/\.png$/i, "") : "");
+
+    // Sync ST tags from updated PNG metadata (best-effort).
+    try {
+      await syncTagsAfterCardsChanged({
+        avatarFile,
+        avatarBase,
+        mode: payload.mode,
+      });
+    } catch (e) {
+      warn("Failed to sync tags after st:cards_changed", e);
+    }
 
     // Try to highlight updated/new character in the UI (best-effort).
     if (avatarBase || avatarFile) {
